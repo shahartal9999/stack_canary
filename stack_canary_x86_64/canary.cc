@@ -54,35 +54,37 @@ namespace
 
         static void insert_value(rtx insn)
         {
-            rtx dec, mov, psh, mem, xor_action, eax;
+            rtx dec, mov, psh, mem, esp, xor_action, add_action, eax;
 
+            // Get registers
             eax = gen_rtx_REG(DImode, AX_REG);
-            // ebx = gen_rtx_REG(DImode, BX_REG);
-            // ecx = gen_rtx_REG(DImode, CX_REG);
+            //esp = gen_rtx_REG(DImode, SP_REG);
 
-            /* Each pair (setup and check) will use this value, it will change each time
-             * a new "basic canary" is inserted
-             */
             rng_guard_value = rand();
             std::cerr <<  "rand() = " << rng_guard_value << "\n";
             
-            /* mov $<rand>, %eax */
+            // mov $<rand>, eax
             mov = gen_rtx_SET(
                 eax,
                 gen_rtx_CONST_INT(VOIDmode, rng_guard_value)
                 );
             
-            /* push %eax */
+            emit_insn_before(mov, insn);
+
+            // push eax
             dec = gen_rtx_PRE_DEC(DImode, stack_pointer_rtx);
             mem = gen_rtx_MEM(DImode, dec);
             psh = gen_rtx_SET(mem, eax);
 
-            emit_insn_before(mov, insn);
             emit_insn_before(psh, insn);
 
-            /* xor %eax, %eax */
+            // xor eax, eax
             xor_action = gen_xordi3(eax, eax, eax);
             emit_insn_before(xor_action, insn);
+
+            // /* add %esp, 4 */
+            // add_action = gen_addsi3(esp, esp, GEN_INT(4));
+            // emit_insn_before(add_action, insn);
 
         }
 
@@ -155,29 +157,6 @@ namespace
 
         private:
 
-        static tree callback_stmt(gimple_stmt_iterator * gsi, bool *handled_all_ops, struct walk_stmt_info *wi)
-        {
-
-            // gimple g = gsi_stmt(*gsi);
-
-            // location_t l = gimple_location(g);
-            // enum gimple_code code = gimple_code(g);
-
-            // fprintf(stderr, "Statement of type: %s at %s:%d\n",
-            //         gimple_code_name[code],
-            //         LOCATION_FILE(l),
-            //         LOCATION_LINE(l));
-            std::cerr <<  "blb" << "\n";
-            return NULL;
-        }
-
-        // static tree callback_op(tree *t, int *, void *data)
-        // {
-        //     enum tree_code code = TREE_CODE(*t);
-
-        //     fprintf(stderr, "   Operand: %s\n", get_tree_code_name(code));
-        //     return NULL;
-        // }
     };
 }
 
