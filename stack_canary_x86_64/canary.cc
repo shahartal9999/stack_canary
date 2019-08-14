@@ -54,61 +54,112 @@ namespace
 
         static void insert_value(rtx insn)
         {
-            rtx dec, mov, psh, mem, esp, xor_action, add_action, eax;
+            rtx dec;
 
-            // Get registers
-            eax = gen_rtx_REG(DImode, AX_REG);
-            //esp = gen_rtx_REG(DImode, SP_REG);
-
-            rng_guard_value = rand();
-            std::cerr <<  "rand() = " << rng_guard_value << "\n";
             
-            // mov $<rand>, eax
-            mov = gen_rtx_SET(
-                eax,
-                gen_rtx_CONST_INT(VOIDmode, rng_guard_value)
-                );
-            
-            emit_insn_before(mov, insn);
+            // actions
+            rtx xor_action;
+            rtx sub_action;
+            rtx mov_action;
+            rtx psh_action;
 
-            // push eax
+            // helpers
+            rtx mem;
+            rtx label;
+            rtx last;
+            rtx tmp;;
+
+            // Registers
+            rtx rax = gen_rtx_REG(DImode, AX_REG);
+            rtx rcx = gen_rtx_REG(DImode, CX_REG);
+            rtx rdi = gen_rtx_REG(DImode, DI_REG);
+            rtx rsp = gen_rtx_REG(DImode, SP_REG);
+
+            // call rand()
+            tmp = gen_rtx_SYMBOL_REF (Pmode, "rand");
+            tmp = gen_rtx_CALL (VOIDmode, gen_rtx_MEM (FUNCTION_MODE, tmp), const0_rtx);
+            emit_insn_before(tmp, insn);
+
+            // push rax - save rand result in stack
             dec = gen_rtx_PRE_DEC(DImode, stack_pointer_rtx);
             mem = gen_rtx_MEM(DImode, dec);
-            psh = gen_rtx_SET(mem, eax);
+            psh_action = gen_rtx_SET(mem, rax);
+            emit_insn_before(psh_action, insn);
 
-            emit_insn_before(psh, insn);
+            // push rdi - save old arg
+            dec = gen_rtx_PRE_DEC(DImode, stack_pointer_rtx);
+            mem = gen_rtx_MEM(DImode, dec);
+            psh_action = gen_rtx_SET(mem, rdi);
+            emit_insn_before(psh_action, insn);
 
-            // xor eax, eax
-            xor_action = gen_xordi3(eax, eax, eax);
-            emit_insn_before(xor_action, insn);
+            // Set parameter for malloc (fastcall)
+            mov_action = gen_movsi(rdi, GEN_INT(8));
+            emit_insn_before(mov_action, insn);
 
-            // /* add %esp, 4 */
-            // add_action = gen_addsi3(esp, esp, GEN_INT(4));
-            // emit_insn_before(add_action, insn);
+            // call malloc(8)
+            tmp = gen_rtx_SYMBOL_REF (Pmode, "malloc");
+            tmp = gen_rtx_CALL (VOIDmode, gen_rtx_MEM (FUNCTION_MODE, tmp), const0_rtx);
+            emit_insn_before(tmp, insn);
+
+            // pop rdi - restore old arg
+            tmp = gen_rtx_POST_INC(DImode, stack_pointer_rtx);
+            mem = gen_rtx_MEM(DImode, tmp);
+            tmp = gen_rtx_SET(rdi, mem);
+            last = emit_insn_before(tmp, insn);
+
+            // pop rcx - restore rand result
+            tmp = gen_rtx_POST_INC(DImode, stack_pointer_rtx);
+            mem = gen_rtx_MEM(DImode, tmp);
+            tmp = gen_rtx_SET(rcx, mem);
+            last = emit_insn_before(tmp, insn);
+
+            // mov value, rax
+            mov_action = gen_movsi(gen_rtx_MEM(Pmode, rax), rcx);
+            emit_insn_before(mov_action, insn);
+
+            // push rcx
+            dec = gen_rtx_PRE_DEC(DImode, stack_pointer_rtx);
+            mem = gen_rtx_MEM(DImode, dec);
+            psh_action = gen_rtx_SET(mem, rcx);
+            emit_insn_before(psh_action, insn);
+
+            // add rsp, <sizeof(int)> //TODO: is needed??
+            sub_action = gen_adddi3(stack_pointer_rtx, stack_pointer_rtx, GEN_INT(8));
+            emit_insn_before(sub_action, insn);
 
         }
 
 
-        /* Check that the static canary value has not been stepped on */
         static void check_value(rtx insn)
         {
-            /* Get the canary from stack and put it into %rax */
-            rtx last, mem, rbx, tmp, label;
+            // Helpers
+            rtx last, mem, tmp, label;
 
-            /* pop %rbx */
-            rbx = gen_rtx_POST_INC(DImode, stack_pointer_rtx);
-            mem = gen_rtx_MEM(DImode, rbx);
-            tmp = gen_rtx_SET(gen_rtx_REG(DImode, 1), mem);
-            last = emit_insn_after(tmp, insn);
+            // Actions
+            rtx sub_action;
 
-            /* cmp $666, %rbx */
+            // Registers
+            rtx rbx = gen_rtx_REG(DImode, BX_REG);
+
+            // sub rsp, <sizeof(int)> //TODO: is needed?
+            sub_action = gen_subdi3(stack_pointer_rtx, stack_pointer_rtx, GEN_INT(8));
+            last = emit_insn_after(sub_action, insn);
+
+            // pop rbx
+            tmp = gen_rtx_POST_INC(DImode, stack_pointer_rtx);
+            mem = gen_rtx_MEM(DImode, tmp);
+            tmp = gen_rtx_SET(rbx, mem);
+            last = emit_insn_after(tmp, last);
+
+            // TODO: Should cmp to the allocated value
+            // cmp ALLOCATED, rbx
             tmp = gen_rtx_COMPARE(CCmode,
-                gen_rtx_REG(DImode, 1),
+                rbx,
                 gen_rtx_CONST_INT(VOIDmode, rng_guard_value));
             tmp = gen_rtx_SET(gen_rtx_REG(CCmode, FLAGS_REG), tmp);
             last = emit_insn_after(tmp, last);
 
-            /* jeq */
+            // jeq 
             label = gen_label_rtx(); /* Where we jump to */
             tmp = gen_rtx_EQ(VOIDmode, gen_rtx_REG(CCmode, FLAGS_REG), const0_rtx);
             tmp = gen_rtx_IF_THEN_ELSE(VOIDmode,
@@ -118,7 +169,7 @@ namespace
             last = emit_jump_insn_after(gen_rtx_SET(pc_rtx, tmp), last);
             JUMP_LABEL(last) = label;
 
-            /* Call abort() */
+            // Call abort()
             tmp = gen_rtx_SYMBOL_REF(Pmode, "abort");
             tmp = gen_rtx_CALL(Pmode, gen_rtx_MEM(QImode, tmp), const0_rtx);
             last = emit_insn_after(tmp, last);
